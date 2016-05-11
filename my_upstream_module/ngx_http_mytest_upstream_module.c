@@ -45,7 +45,7 @@ static void * ngx_http_mytest_create_loc_conf(ngx_conf_t *cf)
 
     mycf->upstream.hide_headers = NGX_CONF_UNSET_PTR;
     mycf->upstream.pass_headers = NGX_CONF_UNSET_PTR;
-
+    
     return mycf;
 }
 
