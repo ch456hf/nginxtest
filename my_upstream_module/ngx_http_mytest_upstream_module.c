@@ -3,18 +3,30 @@
 #include <ngx_http.h>
 #include <string.h>
 
+
 typedef struct {
     ngx_http_upstream_conf_t upstream;
 } ngx_http_mytest_conf_t;
 
 typedef struct {
     ngx_http_status_t status;
+    ngx_str_t backendServer;
 } ngx_http_mytest_ctx_t;
 
 static ngx_int_t ngx_http_mytest_handler(ngx_http_request_t *r);
 
 static char * 
 ngx_http_mytest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+
+static ngx_int_t mytest_process_status_line(ngx_http_request_t *r);
+
+static ngx_int_t mytest_upstream_process_header(ngx_http_request_t *r);
+
+static void * ngx_http_mytest_create_loc_conf(ngx_conf_t *cf);
+
+static char *ngx_http_mytest_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
+
+static void mytest_upstream_finalize_request(ngx_http_request_t *r, ngx_int_t rc);
 
 static ngx_command_t ngx_http_mytest_commands[] = {
     {
@@ -28,10 +40,36 @@ static ngx_command_t ngx_http_mytest_commands[] = {
     ngx_null_command
 };
 
+static ngx_http_module_t ngx_http_mytest_module_ctx = {
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    ngx_http_mytest_create_loc_conf,
+    ngx_http_mytest_merge_loc_conf
+};
+
+ngx_module_t ngx_http_mytest_upstream_module = {
+    NGX_MODULE_V1,
+    &ngx_http_mytest_module_ctx,
+    ngx_http_mytest_commands,
+    NGX_HTTP_MODULE,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NGX_MODULE_V1_PADDING
+};
+
 static void * ngx_http_mytest_create_loc_conf(ngx_conf_t *cf)
 {
     ngx_http_mytest_conf_t *mycf;
-    mycf = (ngx_http_mytest_conf_t *)ngx_pcalloc(cf->conf, sizeof(ngx_http_mytest_conf_t));
+    mycf = (ngx_http_mytest_conf_t *)ngx_pcalloc(cf->pool, sizeof(ngx_http_mytest_conf_t));
     if(mycf == NULL)
         return NULL;
           
@@ -53,6 +91,19 @@ static void * ngx_http_mytest_create_loc_conf(ngx_conf_t *cf)
     return mycf;
 }
 
+static ngx_str_t  ngx_http_proxy_hide_headers[] = {
+        ngx_string("Date"),
+        ngx_string("Server"),
+        ngx_string("X-Pad"),
+        ngx_string("X-Accel-Expires"),
+        ngx_string("X-Accel-Redirect"),
+        ngx_string("X-Accel-Limit-Rate"),
+        ngx_string("X-Accel-Buffering"),
+        ngx_string("X-Accel-Charset"),
+        ngx_null_string
+};
+
+
 static char *ngx_http_mytest_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
 {
     ngx_http_mytest_conf_t *prev = (ngx_http_mytest_conf_t *)parent;
@@ -70,7 +121,7 @@ static char *ngx_http_mytest_merge_loc_conf(ngx_conf_t *cf, void *parent, void *
 //创建发送给上游服务器的http请求，函数指针赋给ngx_http_mytest_conf中的upstream中的create_request指针
 static ngx_int_t mytest_upstream_create_request(ngx_http_request_t *r)
 {
-    static ngx_str_t backendQueryLine = ngx_string("Get /search?q=%V HTTP/1.1\r\nHost: www.baidu.com\r\nConnection: close\r\n\r\n");
+    static ngx_str_t backendQueryLine = ngx_string("GET /s?wd=1 HTTP/1.1\r\nHost:cn.bing.com\r\nConnection:close\r\n\r\n");
     ngx_int_t queryLineLen = backendQueryLine.len + r->args.len - 2;
     ngx_buf_t *b = ngx_create_temp_buf(r->pool, queryLineLen);
     if(b == NULL)
@@ -223,36 +274,12 @@ static ngx_int_t mytest_upstream_process_header(ngx_http_request_t *r)
 }
 
 //finalize_request是再当请求结束的时候回调用的，此时用来释放一定资源，比如打开的句柄。
-static void mytest_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
+static void mytest_upstream_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
 {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "mytest_upstream_finalize_request");
 }
 
-static ngx_http_module_t ngx_http_mytest_module_ctx = {
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    ngx_http_mytest_create_loc_conf,
-    ngx_http_mytest_merge_loc_conf
-};
 
-ngx_module_t ngx_http_mytest_upstream_module = {
-    NGX_MODULE_V1,
-    &ngx_http_mytest_module_ctx,
-    ngx_http_mytest_commands,
-    NGX_HTTP_MODULE,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NGX_MODULE_V1_PADDING
-};
 
 
 static char * 
@@ -269,6 +296,61 @@ ngx_http_mytest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
 static ngx_int_t ngx_http_mytest_handler(ngx_http_request_t *r)
 {
+    ngx_http_mytest_ctx_t *myctx = ngx_http_get_module_ctx(r, ngx_http_mytest_upstream_module);
+    if(myctx == NULL) {
+        myctx = ngx_palloc(r->pool, sizeof(ngx_http_mytest_ctx_t));
+        if(myctx == NULL)
+            return NGX_ERROR;
+
+        ngx_http_set_ctx(r, myctx, ngx_http_mytest_upstream_module);
+    }
+
+    if(ngx_http_upstream_create(r) != NGX_OK) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "ngx_http_upstream_ceate() failed");
+        return NGX_ERROR;
+    }
+
+    ngx_http_mytest_conf_t *mycf = (ngx_http_mytest_conf_t *) ngx_http_get_module_loc_conf(r, ngx_http_mytest_upstream_module);
+    ngx_http_upstream_t *u = r->upstream;
+    u->conf = &mycf->upstream;
+    u->buffering = mycf->upstream.buffering;
+
+    u->resolved = (ngx_http_upstream_resolved_t *)ngx_pcalloc(r->pool, sizeof(ngx_http_upstream_resolved_t));
+    if(u->resolved == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "ngx_pcalloc resolved error. %s", strerror(errno));
+        return NGX_ERROR;
+    }
+
+    static struct sockaddr_in backendSockAddr;
+    struct hostent *pHost = gethostbyname((char *) "cn.bing.com");
+    if(pHost == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "gethostbyname fail. %s", strerror(errno));
+        return NGX_ERROR;
+    }
+    
+    backendSockAddr.sin_family = AF_INET;
+    backendSockAddr.sin_port = htons((in_port_t) 80);
+    char *pDmsIP = inet_ntoa(*(struct in_addr *) (pHost->h_addr_list[0]));
+    backendSockAddr.sin_addr.s_addr = inet_addr(pDmsIP);
+    myctx->backendServer.data = (u_char *)pDmsIP;
+    myctx->backendServer.len = strlen(pDmsIP);
+
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "IP:%s", pDmsIP);
+
+    u->resolved->sockaddr = (struct sockaddr *)&backendSockAddr;
+    u->resolved->socklen = sizeof(struct sockaddr_in);
+    u->resolved->naddrs = 1;
+    //设置3个必要的回调方法
+    u->create_request = mytest_upstream_create_request;
+    u->process_header = mytest_process_status_line;
+    u->finalize_request = mytest_upstream_finalize_request;
+
+    r->main->count ++;
+    //启动upstream
+    ngx_http_upstream_init(r);
+    //必须返回NGX_DONE
+    return NGX_DONE;
+    
 }
 
 /*用做mytest模块的回调函数，此处注释掉，上面的是重新写的upstream模块的回调函数
