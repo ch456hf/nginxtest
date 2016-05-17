@@ -69,7 +69,7 @@ static ngx_int_t ngx_http_mytest_handler(ngx_http_request_t *r)
     if (rc != NGX_OK) {
         return rc;
     }
-    /*单纯的发送一串字符串用此处
+    /*单纯的发送一串字符串用此处*/
     ngx_str_t type = ngx_string("text/plain");
     ngx_str_t response = ngx_string("Hello World");
     r->headers_out.status = NGX_HTTP_OK;
@@ -93,9 +93,10 @@ static ngx_int_t ngx_http_mytest_handler(ngx_http_request_t *r)
     ngx_chain_t out;
     out.buf = b;
     out.next = NULL;
-    */
+    return ngx_http_output_filter(r, &out);
+    
     /*用http发送文件用此处*/
-
+/*
     ngx_buf_t *b;
     b = ngx_palloc(r->pool, sizeof(ngx_buf_t));
 
@@ -146,6 +147,6 @@ static ngx_int_t ngx_http_mytest_handler(ngx_http_request_t *r)
     out.buf = b;
     out.next = NULL;
 
-    return ngx_http_output_filter(r, &out);
+    return ngx_http_output_filter(r, &out);*/
 }
 
